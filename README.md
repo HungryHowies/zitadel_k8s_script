@@ -1,0 +1,1 @@
+# zitadel_k8s_script
