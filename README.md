@@ -8,6 +8,10 @@ Add to file
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Disable all interactive apt prompts & service restart questions
+#export DEBIAN_FRONTEND=noninteractive
+#export NEEDRESTART_MODE=a
+
 # =========================
 # Colors & helpers
 # =========================
@@ -41,6 +45,7 @@ read -rp "Postgres password [zitadelpass]: " POSTGRES_PASS
 POSTGRES_PASS=${POSTGRES_PASS:-zitadelpass}
 
 INSTALL_DIR="/opt/zitadel-k8s"
+
 
 # =========================
 # Base system
@@ -119,11 +124,22 @@ fi
 ok "KIND cluster ready"
 
 # =========================
-# Ingress + cert-manager
+# Ingress + Nginx fixes
 # =========================
-step "Installing ingress-nginx & cert-manager"
+step "Installing ingress-nginx & fixing NodePort + hostNetwork"
+
+# Apply default manifests
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+
+# Patch Service to NodePort
+kubectl patch svc ingress-nginx-controller -n ingress-nginx \
+  -p '{"spec": {"type": "NodePort"}}'
+
+# Patch Deployment to use hostNetwork
+kubectl patch deployment ingress-nginx-controller -n ingress-nginx \
+  --patch '{"spec": {"template": {"spec": {"hostNetwork": true, "dnsPolicy": "ClusterFirstWithHostNet"}}}}'
+
+ok "Ingress-nginx patched with NodePort and hostNetwork"
 
 # =========================
 # OpenEBS + StorageClass
@@ -261,37 +277,39 @@ SQL"
 
 ok "Postgres patched"
 
-# =========================
-# Masterkey
-# =========================
+#####################
+####### Master Key
+#####################
+
 step "Creating Zitadel masterkey"
 
-# absolutely no pipelines, no subshell traps
-MASTERKEY=$(openssl rand -hex 32)
+# Generate EXACTLY 32 CHARACTERS (what Zitadel actually validates)
+MASTERKEY=$(openssl rand -base64 24 | tr -d '\n' | cut -c1-32)
 
-: "${MASTERKEY:?Masterkey generation failed}"
+# Hard validation
+if [ -z "$MASTERKEY" ]; then
+  echo "❌ Failed to generate masterkey"
+  exit 1
+fi
 
-MASTERKEY_YAML="$INSTALL_DIR/zitadel-masterkey.yaml"
+if [ "$(echo -n "$MASTERKEY" | wc -c)" -ne 32 ]; then
+  echo " Masterkey is not 32 characters"
+  exit 1
+fi
 
-echo "Writing masterkey YAML to $MASTERKEY_YAML"
+# Ensure namespace exists
+kubectl get ns zitadel >/dev/null 2>&1 || kubectl create ns zitadel
 
-cat > "$MASTERKEY_YAML" <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: zitadel-masterkey
-  namespace: zitadel
-type: Opaque
-stringData:
-  masterkey: "$MASTERKEY"
-EOF
+# Create / update secret (idempotent)
+kubectl create secret generic zitadel-masterkey \
+  --from-literal=masterkey="$MASTERKEY" \
+  -n zitadel \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-ls -l "$MASTERKEY_YAML" || { echo "YAML was NOT created"; exit 1; }
-
-kubectl apply -f "$MASTERKEY_YAML"
+# Verify secret exists
+kubectl get secret zitadel-masterkey -n zitadel >/dev/null
 
 ok "Zitadel masterkey created"
-
 
 # =========================
 # Zitadel Helm values
@@ -394,6 +412,32 @@ SQL"
 kubectl delete pod -n zitadel -l app.kubernetes.io/name=zitadel-login || true
 
 ok "login_v2 disabled"
+
+step "Creating systemd service for port-forwarding ingress-nginx"
+
+PORT_FORWARD_FILE="/etc/systemd/system/k8s-port-forward.service"
+
+cat > "$PORT_FORWARD_FILE" <<EOF
+[Unit]
+Description=Port forward ingress-nginx
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/local/bin/kubectl port-forward -n ingress-nginx service/ingress-nginx-controller 8443:443 --address 0.0.0.0
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd and enable the service
+systemctl daemon-reload
+systemctl enable k8s-port-forward
+systemctl restart k8s-port-forward
+
+ok "Port-forward service created and started"
+
 
 # =========================
 # DONE
