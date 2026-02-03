@@ -261,18 +261,19 @@ SQL"
 
 ok "Postgres patched"
 
-#####################
-####### Master Key
-#####################
-
+# =========================
+# Masterkey
+# =========================
 step "Creating Zitadel masterkey"
 
-# Generate 32-character key
-MASTERKEY="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+# absolutely no pipelines, no subshell traps
+MASTERKEY=$(openssl rand -hex 32)
+
 : "${MASTERKEY:?Masterkey generation failed}"
 
-# Pre-create YAML file (overwrite if exists)
 MASTERKEY_YAML="$INSTALL_DIR/zitadel-masterkey.yaml"
+
+echo "Writing masterkey YAML to $MASTERKEY_YAML"
 
 cat > "$MASTERKEY_YAML" <<EOF
 apiVersion: v1
@@ -285,19 +286,11 @@ stringData:
   masterkey: "$MASTERKEY"
 EOF
 
-# Apply secret safely
-if kubectl apply -f "$MASTERKEY_YAML"; then
-    echo "✅ Masterkey secret applied to cluster"
-else
-    echo "❌ Failed to apply masterkey secret"
-    kubectl get ns zitadel
-    kubectl get pods -A
-    exit 1
-fi
+ls -l "$MASTERKEY_YAML" || { echo "YAML was NOT created"; exit 1; }
+
+kubectl apply -f "$MASTERKEY_YAML"
 
 ok "Zitadel masterkey created"
-
-
 
 
 # =========================
