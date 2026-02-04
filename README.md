@@ -9,8 +9,8 @@ Add to file
 set -euo pipefail
 
 # Disable all interactive apt prompts & service restart questions
-#export DEBIAN_FRONTEND=noninteractive
-#export NEEDRESTART_MODE=a
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 
 # =========================
 # Colors & helpers
@@ -44,18 +44,40 @@ read -rp "Host IP for /etc/hosts (example 192.168.1.210): " HOST_IP
 read -rp "Postgres password [zitadelpass]: " POSTGRES_PASS
 POSTGRES_PASS=${POSTGRES_PASS:-zitadelpass}
 
-INSTALL_DIR="/opt/zitadel-k8s"
+# -------------------------
+# Zitadel Admin Login Info
+# -------------------------
+ZITADEL_ADMIN_USER="zitadel-admin@zitadel.${ZITADEL_DOMAIN}"
+ZITADEL_ADMIN_PASS="Password1!"
 
+#--------------------
+# Service prompt stop
+#--------------------
+INSTALL_DIR="/opt/zitadel-k8s"
+mkdir -p /etc/needrestart
+cat > /etc/needrestart/needrestart.conf <<'EOF'
+$nrconf{restart} = 'a';
+$nrconf{kernelhints} = -1;
+EOF
 
 # =========================
 # Base system
 # =========================
 step "System update & base packages"
-apt update && apt -y upgrade
+apt-get update
+apt-get -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
+  upgrade
+
 timedatectl set-timezone "$TIMEZONE"
 
-apt install -y net-tools plocate vim git sendmail curl jq nodejs \
+apt-get install -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
+  net-tools plocate vim git sendmail curl jq nodejs \
   ca-certificates gnupg
+
 
 mkdir -p "$INSTALL_DIR"
 ok "Base system ready"
@@ -76,8 +98,12 @@ https://download.docker.com/linux/ubuntu \
 $(lsb_release -cs) stable" \
 > /etc/apt/sources.list.d/docker.list
 
-apt update
-apt install -y docker-ce docker-ce-cli containerd.io
+apt-get update
+apt-get install -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
+  docker-ce docker-ce-cli containerd.io
+
 systemctl enable --now docker
 usermod -aG docker "$SUDO_USER" || true
 ok "Docker installed"
@@ -443,5 +469,12 @@ ok "Port-forward service created and started"
 # DONE
 # =========================
 echo -e "\n${GREEN}🎉 Zitadel installation complete${RESET}"
-echo "URL: https://${ZITADEL_DOMAIN}:8443"
+echo
+echo -e "${CYAN}Access URL:${RESET}"
+echo "  https://${ZITADEL_DOMAIN}:8443"
+echo
+echo -e "${CYAN}Zitadel Admin Login:${RESET}"
+echo "  User: ${ZITADEL_ADMIN_USER}"
+echo "  Pass: ${ZITADEL_ADMIN_PASS}"
+echo
 ```
