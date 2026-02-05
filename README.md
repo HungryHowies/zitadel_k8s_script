@@ -234,6 +234,7 @@ spec:
     spec:
       securityContext:
         fsGroup: 999
+        fsGroupChangePolicy: "OnRootMismatch"
       containers:
         - name: postgres
           image: postgres:14.10-alpine
