@@ -8,6 +8,10 @@ Add to file
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure OpenEBS local directory exists
+sudo mkdir -p /var/openebs/local
+sudo chmod 777 /var/openebs/local
+
 # Disable all interactive apt prompts & service restart questions
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
