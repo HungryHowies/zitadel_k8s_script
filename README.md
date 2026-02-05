@@ -8,7 +8,7 @@ Add to file
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure OpenEBS local directory exists
+# Ensure OpenEBS local directory existsThis is for Velero/MinIO
 sudo mkdir -p /var/openebs/local
 sudo chmod 777 /var/openebs/local
 
