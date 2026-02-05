@@ -232,6 +232,8 @@ spec:
       labels:
         app: zitadel-postgres
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: postgres
           image: postgres:14.10-alpine
