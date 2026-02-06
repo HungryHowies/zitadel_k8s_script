@@ -8,9 +8,13 @@ Add to file
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure OpenEBS local directory existsThis is for Velero/MinIO
+## openebs create directory
 sudo mkdir -p /var/openebs/local
 sudo chmod 777 /var/openebs/local
+
+##  Home Directory for Zitadel
+sudo mkdir -p /opt/zitadel-k8s
+sudo chmod 755 /opt/zitadel-k8s
 
 # Disable all interactive apt prompts & service restart questions
 export DEBIAN_FRONTEND=noninteractive
@@ -321,7 +325,7 @@ MASTERKEY=$(openssl rand -base64 24 | tr -d '\n' | cut -c1-32)
 
 # Hard validation
 if [ -z "$MASTERKEY" ]; then
-  echo "❌ Failed to generate masterkey"
+  echo "Failed to generate masterkey"
   exit 1
 fi
 
@@ -409,6 +413,30 @@ if ! grep -q "$ZITADEL_DOMAIN" /etc/hosts; then
 else
     ok "/etc/hosts already contains $ZITADEL_DOMAIN"
 fi
+#----------
+# PVC name
+#----------
+PVC_NAME="zitadel-postgres-data-csi"
+NAMESPACE="zitadel"
+
+# Get the PV name bound to this PVC
+PV_NAME=$(kubectl get pvc "$PVC_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.volumeName}')
+
+# Get the host path of the PV
+PV_PATH=$(kubectl get pv "$PV_NAME" -o jsonpath='{.spec.local.path}')
+
+# Fix permissions inside KIND node container
+NODE_CONTAINER="${CLUSTER_NAME}-control-plane"
+
+docker exec "$NODE_CONTAINER" bash -c "
+  cd \"$PV_PATH\"
+  mkdir -p .velero
+  chmod 755 .
+  chmod 755 .velero
+"
+
+echo "OpenEBS PV permissions fixed at: $PV_PATH/.velero"
+
 
 # =========================
 # Install / Upgrade Zitadel
@@ -475,7 +503,7 @@ ok "Port-forward service created and started"
 # =========================
 # DONE
 # =========================
-echo -e "\n${GREEN}🎉 Zitadel installation complete${RESET}"
+echo -e "\n${GREEN} Zitadel installation complete${RESET}"
 echo
 echo -e "${CYAN}Access URL:${RESET}"
 echo "  https://${ZITADEL_DOMAIN}:8443"
