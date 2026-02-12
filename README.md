@@ -453,26 +453,65 @@ kubectl wait --for=condition=Available deployment/zitadel \
   -n zitadel --timeout=600s
 
 # =========================
-# Disable login_v2 (DB)
+# Disable login_v2 (DB) - robust dynamic version
 # =========================
 step "Disabling login_v2"
 
+# Detect Postgres pod dynamically
+echo "Detecting Postgres pod..."
+POSTGRES_POD=""
+while [[ -z "$POSTGRES_POD" ]]; do
+    POSTGRES_POD=$(kubectl get pod -n zitadel -l app=zitadel-postgres \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    [[ -z "$POSTGRES_POD" ]] && sleep 2
+done
+echo "Found Postgres pod: $POSTGRES_POD"
+
+# Wait for Postgres pod to be Ready
+echo "Waiting for Postgres pod to be Ready..."
+kubectl wait --for=condition=Ready pod/"$POSTGRES_POD" -n zitadel --timeout=3600s
+
+# Wait until projections.instance_features table exists
+echo "Waiting for projections.instance_features table..."
+TABLE_EXISTS=""
+until [[ "$TABLE_EXISTS" == "1" ]]; do
+    TABLE_EXISTS=$(kubectl exec -n zitadel "$POSTGRES_POD" -- \
+      psql -h localhost -U postgres -d zitadel -tAc \
+      "SELECT 1 FROM pg_tables WHERE schemaname='projections' AND tablename LIKE 'instance_features%';") || true
+    [[ "$TABLE_EXISTS" != "1" ]] && echo -n "." && sleep 5
+done
+echo " Table exists!"
+
+# Detect the latest instance_features table dynamically
+TABLE_NAME=$(kubectl exec -n zitadel "$POSTGRES_POD" -- \
+  psql -h localhost -U postgres -d zitadel -tAc \
+  "SELECT tablename 
+   FROM pg_tables 
+   WHERE schemaname='projections' AND tablename LIKE 'instance_features%' 
+   ORDER BY tablename DESC LIMIT 1;")
+echo "Using table: $TABLE_NAME"
+
+# Get the instance ID
 INSTANCE_ID=$(kubectl exec -n zitadel "$POSTGRES_POD" -- \
-  sh -c "psql -h localhost -U postgres -d zitadel \
-  -t -A -P pager=off \
-  -c \"SELECT id FROM projections.instances LIMIT 1;\"")
+  psql -h localhost -U postgres -d zitadel \
+  -t -A -P pager=off -c "SELECT id FROM projections.instances LIMIT 1;")
 
+# Check instance ID exists
+[[ -z "$INSTANCE_ID" ]] && fail "Could not detect instance ID"
+
+# Update the login_v2 feature to disabled
 kubectl exec -n zitadel "$POSTGRES_POD" -- \
-  sh -c "psql -h localhost -U postgres -d zitadel \
-  -v ON_ERROR_STOP=1 -P pager=off <<SQL
-UPDATE projections.instance_features2
-SET value='{\"required\": false}'
+  psql -h localhost -U postgres -d zitadel -v ON_ERROR_STOP=1 -P pager=off <<SQL
+UPDATE projections."$TABLE_NAME"
+SET value='{"required": false}'
 WHERE instance_id='${INSTANCE_ID}' AND key='login_v2';
-SQL"
+SQL
 
+# Restart login pods to apply changes
 kubectl delete pod -n zitadel -l app.kubernetes.io/name=zitadel-login || true
 
-ok "login_v2 disabled"
+ok "login_v2 disabled successfully"
+
 
 step "Creating systemd service for port-forwarding ingress-nginx"
 
